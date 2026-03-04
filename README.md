@@ -4,9 +4,15 @@
 
 ## 功能
 
-1. **涉密字段脱敏**：日志内容中的指定字段（如 `password`、`token`）统一替换为 `***`
+1. **涉密字段脱敏**：日志内容中的指定字段（如 `password`、`token`、`user_password`）统一替换为 `***`
 2. **params 开关**：通过 `params['logMask']['enabled']` 控制是否启用脱敏，便于按环境开关
 3. **可配置脱敏字段**：通过 `params['logMask']['mask_keys']` 与 `mask_vars` 定义参与脱敏的字段或参数
+4. **三种脱敏范围**：
+   - **数组日志**：`Yii::info($array)` 时，数组中与 `mask_keys` 同名的键会被脱敏（含嵌套）
+   - **字符串日志**：`Params=user_name=xx&user_password=123456` 这类 `key=value` 字符串中，匹配的 value 会变为 `***`
+   - **上下文变量**：error/warning 时输出的 `$_GET`、`$_POST` 等会按 `mask_keys` 与 `mask_vars` 脱敏
+5. **命名兼容**：`mask_keys` 中配置 `user_password` 会同时匹配 `userPassword`（驼峰）
+6. **直接写文件场景**：若项目用 `file_put_contents` 等直接写日志，可调用 `MaskedFileTarget::maskLogString($text)` 在写入前脱敏
 
 ## 安装
 
@@ -61,8 +67,8 @@ composer require liwenyu/yii2-masked-log
 ```
 
 - **enabled**：`true` 时启用脱敏，`false` 时与普通 `FileTarget` 行为一致  
-- **mask_keys**：仅对「日志消息内容」生效。当使用 `Yii::info($array)` 且 `$array` 中有这些键时，对应值会变成 `***`，键名不区分大小写  
-- **mask_vars**：对「上下文变量」（如 `logVars` 里的 `_GET`、`_POST`）生效，格式同 Yii2 自带的 `maskVars`（如 `_POST.password`）
+- **mask_keys**：参与脱敏的字段名（不区分大小写，且 `user_password` 会自动匹配 `userPassword`）。对「数组日志」和「key=value 字符串」以及「上下文里的 _GET/_POST 等数组」均生效  
+- **mask_vars**：对上下文变量做按路径脱敏的补充项，格式同 Yii2 的 `maskVars`（如 `_POST.password`、`_SERVER.HTTP_AUTHORIZATION`）。配置了 `mask_keys` 后，上下文中同名字段也会被脱敏，可按需再在 `mask_vars` 中补路径
 
 ### 2. 将 log 的 FileTarget 换成本组件
 
@@ -125,6 +131,30 @@ Yii::info([
 ```
 
 写入文件的内容中，上述 `password`、`token` 会显示为 `***`。
+
+### 直接写文件的日志（如 request/response 拼接字符串）
+
+若项目中有用 `file_put_contents` 等直接写日志（不经过 Yii 的 log target），需在写入前对字符串做脱敏。可调用静态方法：
+
+```php
+use liwenyu\maskedlog\MaskedFileTarget;
+
+$raw = 'POST /api/v2/users, Params=user_name=test&user_password=123456';
+$safe = MaskedFileTarget::maskLogString($raw);
+// $safe = 'POST /api/v2/users, Params=user_name=test&user_password=***'
+file_put_contents($logFile, $safe . "\n", FILE_APPEND);
+```
+
+`maskLogString()` 会读取 `params['logMask']`（enabled、mask_keys），仅对字符串中的 `key=value` 形式做替换，与 FileTarget 脱敏规则一致。
+
+### 404 / error 时上下文脱敏
+
+404 或未捕获异常时，Yii 会把 `$_GET`、`$_POST` 等作为上下文写入 error 日志。要脱敏需满足：
+
+1. 写入该日志的 target 使用 **MaskedFileTarget**（不要用 `yii\log\FileTarget`）
+2. `params['logMask']['enabled']` 为 `true`，且 `mask_keys` 中包含需脱敏的键（如 `user_password`、`password`）
+
+组件会对上下文中的 `_POST`、`_GET` 等数组按 `mask_keys` 做整体脱敏，无需在 `mask_vars` 里逐个写 `_POST.user_password`（按需可再补）。
 
 ## 功能测试
 

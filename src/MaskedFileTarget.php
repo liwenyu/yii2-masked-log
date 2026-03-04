@@ -77,12 +77,36 @@ class MaskedFileTarget extends FileTarget
         $this->maskEnabled = !array_key_exists('enabled', $config) || (bool) $config['enabled'];
 
         if (!empty($config['mask_keys']) && is_array($config['mask_keys'])) {
-            $this->maskKeys = array_map('strtolower', $config['mask_keys']);
+            $this->maskKeys = $this->normalizeMaskKeys(array_map('strtolower', $config['mask_keys']));
         }
 
         if ($this->maskEnabled && !empty($config['mask_vars']) && is_array($config['mask_vars'])) {
             $this->maskVars = array_merge($this->maskVars, $config['mask_vars']);
         }
+
+        // 统一展开为 snake_case 与 camelCase 两种形式，便于同时匹配 user_password 与 userPassword
+        if (!empty($this->maskKeys)) {
+            $this->maskKeys = $this->normalizeMaskKeys(array_map('strtolower', $this->maskKeys));
+        }
+    }
+
+    /**
+     * 将 mask_keys 展开为小写 + 去下划线形式，使 user_password 能同时匹配 userPassword
+     *
+     * @param string[] $keys 已小写的键名列表
+     * @return string[]
+     */
+    protected function normalizeMaskKeys(array $keys): array
+    {
+        $out = [];
+        foreach ($keys as $k) {
+            $out[] = $k;
+            $noUnderscore = str_replace('_', '', $k);
+            if ($noUnderscore !== $k) {
+                $out[] = $noUnderscore;
+            }
+        }
+        return array_values(array_unique($out));
     }
 
     /**
@@ -112,9 +136,87 @@ class MaskedFileTarget extends FileTarget
 
         if (is_array($text)) {
             $message[0] = $this->maskArrayRecursive($text);
+        } elseif (is_string($text) && $text !== '') {
+            $message[0] = $this->maskString($text);
         }
 
         return $message;
+    }
+
+    /**
+     * 对字符串形式的日志做脱敏：将 key=value 中 key 在 maskKeys 内的 value 替换为 ***
+     * 用于 Params=user_name=xx&user_password=123456 这类拼接字符串
+     *
+     * @param string $text 原始日志字符串
+     * @return string 脱敏后的字符串
+     */
+    protected function maskString(string $text): string
+    {
+        if (empty($this->maskKeys)) {
+            return $text;
+        }
+        // 按键名长度降序，先匹配 user_password 再匹配 password，避免误替换
+        $keys = $this->maskKeys;
+        usort($keys, function ($a, $b) {
+            return strlen($b) - strlen($a);
+        });
+        foreach ($keys as $key) {
+            $quoted = preg_quote($key, '/');
+            $text = preg_replace(
+                '/(\b' . $quoted . '\s*=\s*)([^&\s]*)/iu',
+                '$1***',
+                $text
+            );
+        }
+        return $text;
+    }
+
+    /**
+     * 静态方法：对字符串按 params['logMask']['mask_keys'] 做 key=value 脱敏
+     * 用于直接写文件的日志（如 common\extend\Log）在写入前调用，与 FileTarget 脱敏规则一致
+     *
+     * @param string $text 原始字符串，如 Params=user_name=xx&user_password=123456
+     * @return string 脱敏后的字符串
+     */
+    public static function maskLogString(string $text): string
+    {
+        if ($text === '' || Yii::$app === null || !isset(Yii::$app->params['logMask']) || !is_array(Yii::$app->params['logMask'])) {
+            return $text;
+        }
+        $config = Yii::$app->params['logMask'];
+        if (isset($config['enabled']) && !$config['enabled']) {
+            return $text;
+        }
+        if (empty($config['mask_keys']) || !is_array($config['mask_keys'])) {
+            return $text;
+        }
+        $keys = array_map('strtolower', $config['mask_keys']);
+        $keys = static::normalizeMaskKeysStatic($keys);
+        usort($keys, function ($a, $b) {
+            return strlen($b) - strlen($a);
+        });
+        foreach ($keys as $key) {
+            $quoted = preg_quote($key, '/');
+            $text = preg_replace('/(\b' . $quoted . '\s*=\s*)([^&\s]*)/iu', '$1***', $text);
+        }
+        return $text;
+    }
+
+    /**
+     * @param string[] $keys 已小写的键名列表
+     * @return string[]
+     */
+    private static function normalizeMaskKeysStatic(array $keys): array
+    {
+        $out = [];
+        foreach ($keys as $k) {
+            $out[] = $k;
+            $noUnderscore = str_replace('_', '', $k);
+            if ($noUnderscore !== $k) {
+                $out[] = $noUnderscore;
+            }
+        }
+        return array_values(array_unique($out));
     }
 
     /**
@@ -156,6 +258,14 @@ class MaskedFileTarget extends FileTarget
             foreach ($this->maskVars as $var) {
                 if (ArrayHelper::getValue($context, $var) !== null) {
                     ArrayHelper::setValue($context, $var, '***');
+                }
+            }
+            // 按 mask_keys 对 _GET、_POST 等数组整体脱敏，避免漏配 mask_vars
+            if (!empty($this->maskKeys)) {
+                foreach ($context as $varName => $varValue) {
+                    if (is_array($varValue)) {
+                        $context[$varName] = $this->maskArrayRecursive($varValue);
+                    }
                 }
             }
         }
