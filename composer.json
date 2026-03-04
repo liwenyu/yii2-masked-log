@@ -1,0 +1,27 @@
+{
+    "name": "liwenyu/yii2-masked-log",
+    "description": "Yii2 文件日志脱敏组件：涉密字段用 *** 代替，支持 params 开关与可配置脱敏字段",
+    "type": "library",
+    "license": "MIT",
+    "support": {
+        "issues": "https://github.com/liwenyu/yii2-masked-log/issues",
+        "source": "https://github.com/liwenyu/yii2-masked-log"
+    },
+    "require": {
+        "php": ">=7.4",
+        "yiisoft/yii2": "~2.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "liwenyu\\maskedlog\\": "src/"
+        }
+    },
+    "keywords": [
+        "yii2",
+        "log",
+        "mask",
+        "sensitive",
+        "password",
+        "security"
+    ]
+}
